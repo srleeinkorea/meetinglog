@@ -1,0 +1,7 @@
+{
+  "name": "Meetinglog",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24",
+  "forwardPorts": [3000],
+  "portsAttributes": {"3000": {"label": "Meetinglog", "onAutoForward": "openBrowser"}},
+  "containerEnv": {"HOST": "127.0.0.1"}
+}
