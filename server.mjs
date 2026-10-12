@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile, writeFile, mkdir, readdir, unlink, rename } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { randomUUID, createHash, timingSafeEqual } from 'node:crypto';
+import { randomUUID, randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { createLocalAI } from './local-ai.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -35,8 +35,25 @@ async function body(req, limit) {
 async function jsonBody(req) { try { return JSON.parse((await body(req, 600_000)).toString()); } catch (e) { if (e.status) throw e; throw new AppError(400, '올바른 JSON 요청이 필요합니다.'); } }
 function reply(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); }
 
-export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'data'), apiKey = process.env.OPENAI_API_KEY, fetchImpl = fetch, localAI = createLocalAI(), appOrigin = process.env.APP_ORIGIN || process.env.RENDER_EXTERNAL_URL, password = process.env.APP_PASSWORD } = {}) {
+export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'data'), apiKey = process.env.OPENAI_API_KEY, fetchImpl = fetch, localAI = createLocalAI(), appOrigin = process.env.APP_ORIGIN || process.env.RENDER_EXTERNAL_URL, password = process.env.APP_PASSWORD, now = Date.now } = {}) {
   const deploymentOrigin = appOrigin ? new URL(appOrigin).origin : null;
+  const requiresAuth = Boolean(deploymentOrigin || password);
+  const sessions = new Map();
+  const loginAttempts = new Map();
+  const sessionSeconds = 12 * 60 * 60;
+  const digest = value => createHash('sha256').update(value).digest();
+  const equal = (a, b) => timingSafeEqual(digest(a), digest(b));
+  const sessionKey = req => {
+    const token = /(?:^|;\s*)meetinglog_session=([^;]+)/.exec(req.headers.cookie || '')?.[1];
+    return token ? digest(token).toString('hex') : null;
+  };
+  const sessionValid = req => {
+    const key = sessionKey(req); const expiry = sessions.get(key);
+    if (expiry && expiry > now()) return true;
+    if (key) sessions.delete(key);
+    return false;
+  };
+  const cookie = (token, age) => `meetinglog_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${age}${deploymentOrigin?.startsWith('https:') ? '; Secure' : ''}`;
   function provider(input) {
     const choice = input || process.env.AI_PROVIDER || 'cloud';
     assert(['local', 'cloud'].includes(choice), '올바른 AI 실행 방식을 선택해 주세요.');
@@ -66,17 +83,50 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
       const expectedOrigin = deploymentOrigin || `http://${host}`;
       assert(host && (deploymentOrigin ? host === new URL(deploymentOrigin).host : /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)), '허용되지 않은 호스트입니다.', 403);
       if (req.headers.origin) assert(req.headers.origin === expectedOrigin, '허용되지 않은 요청 출처입니다.', 403);
-      if (deploymentOrigin || password) {
+      const url = new URL(req.url, `http://${host}`); const route = url.pathname;
+      if (requiresAuth) {
         assert(password && password.length >= 16, '온라인 서버의 APP_PASSWORD 설정이 필요합니다.', 503);
+      }
+      if (req.method === 'POST' && route === '/api/login') {
+        if (!requiresAuth) return reply(res, 200, { authenticated: true });
+        const client = req.socket.remoteAddress;
+        const attempts = loginAttempts.get(client);
+        if (attempts && attempts.until > now() && attempts.count >= 8) {
+          res.setHeader('Retry-After', String(Math.ceil((attempts.until - now()) / 1000)));
+          throw new AppError(429, '로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.');
+        }
+        let input;
+        try { input = JSON.parse((await body(req, 4096)).toString()); }
+        catch (e) { if (e.status) throw e; throw new AppError(400, '올바른 로그인 요청이 필요합니다.'); }
+        assert(input && typeof input.password === 'string' && input.password.length <= 1024, '비밀번호를 입력해 주세요.');
+        if (!equal(input.password, password)) {
+          if (loginAttempts.size >= 1024 && !loginAttempts.has(client)) loginAttempts.delete(loginAttempts.keys().next().value);
+          loginAttempts.set(client, { count: attempts && attempts.until > now() ? attempts.count + 1 : 1, until: attempts && attempts.until > now() ? attempts.until : now() + 10 * 60 * 1000 });
+          throw new AppError(401, '비밀번호가 올바르지 않습니다.');
+        }
+        loginAttempts.delete(client);
+        for (const [key, expiry] of sessions) if (expiry <= now()) sessions.delete(key);
+        if (sessions.size >= 1000) sessions.delete(sessions.keys().next().value);
+        const token = randomBytes(32).toString('base64url');
+        sessions.set(digest(token).toString('hex'), now() + sessionSeconds * 1000);
+        res.setHeader('Set-Cookie', cookie(token, sessionSeconds));
+        return reply(res, 200, { authenticated: true });
+      }
+      if (req.method === 'POST' && route === '/api/logout') {
+        const key = sessionKey(req); if (key) sessions.delete(key);
+        res.setHeader('Set-Cookie', cookie('', 0));
+        return reply(res, 200, { authenticated: false });
+      }
+      const publicAsset = req.method === 'GET' && ['/', '/app.js', '/style.css'].includes(route);
+      if (requiresAuth && !publicAsset && !sessionValid(req)) {
         const supplied = req.headers.authorization || '';
         const expected = 'Basic ' + Buffer.from(`meetinglog:${password}`).toString('base64');
-        if (!timingSafeEqual(createHash('sha256').update(supplied).digest(), createHash('sha256').update(expected).digest())) {
-          res.setHeader('WWW-Authenticate', 'Basic realm="Meetinglog", charset="UTF-8"');
-          return reply(res, 401, { error: '회의록에 접근하려면 로그인해 주세요. 사용자명: meetinglog' });
+        // Keep header authentication for the owner CLI; browsers use the in-page form.
+        if (!equal(supplied, expected)) {
+          return reply(res, 401, { error: '워크스페이스에 접속하려면 로그인해 주세요.' });
         }
       }
-      const url = new URL(req.url, `http://${host}`); const route = url.pathname;
-      if (req.method === 'GET' && route === '/api/config') return reply(res, 200, { configured: Boolean(apiKey), defaultProvider: provider(), local: deploymentOrigin ? null : await localAI.status(), hosted: Boolean(deploymentOrigin), sttModel: process.env.STT_MODEL || 'gpt-4o-transcribe', summaryModel: process.env.SUMMARY_MODEL || 'gpt-4o-mini', maxAudioBytes: MAX_AUDIO, maxLocalCharacters: 12000 });
+      if (req.method === 'GET' && route === '/api/config') return reply(res, 200, { configured: Boolean(apiKey), requiresAuth, defaultProvider: provider(), local: deploymentOrigin ? null : await localAI.status(), hosted: Boolean(deploymentOrigin), sttModel: process.env.STT_MODEL || 'gpt-4o-transcribe', summaryModel: process.env.SUMMARY_MODEL || 'gpt-4o-mini', maxAudioBytes: MAX_AUDIO, maxLocalCharacters: 12000 });
       if (req.method === 'GET' && route === '/api/demo') return reply(res, 200, { title: '회의록 서비스 MVP 기획 회의', transcript: sampleTranscript, summary: sampleSummary, demo: true });
       if (req.method === 'POST' && route === '/api/transcribe') {
         const bytes = await body(req, MAX_AUDIO + 100_000);
@@ -141,7 +191,7 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
       const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'] };
       if (req.method === 'GET' && assets[route]) {
         const [file, type] = assets[route]; const content = await readFile(path.join(root, 'public', file));
-        res.writeHead(200, { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'" }); return res.end(content);
+        res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; form-action 'self'" }); return res.end(content);
       }
       reply(res, 404, { error: '요청한 경로를 찾을 수 없습니다.' });
     } catch (e) { if (!res.headersSent) reply(res, e.status || 500, { error: e.status ? e.message : '서버 처리에 실패했습니다. 다시 시도해 주세요.' }); }

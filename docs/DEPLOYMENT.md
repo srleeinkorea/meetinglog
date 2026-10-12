@@ -11,7 +11,7 @@ GitHub 저장소는 소스 코드를 보관합니다. Node 서버와 AI API를 �
 3. Blueprint 이름은 `meetinglog`, Branch는 `main`, Blueprint Path는 `render.yaml`로 두고 배포합니다. 추가 필수 입력값은 없습니다.
 4. 서비스 주소는 Render의 `RENDER_EXTERNAL_URL`에서 자동으로 감지합니다. 별도 `APP_ORIGIN` 입력이 필요하지 않습니다. 사용자 지정 도메인은 `APP_ORIGIN`으로 지정하세요.
 5. 생성된 `APP_PASSWORD`를 Render 환경변수 화면에서 확인합니다.
-6. 앱을 열고 브라우저 로그인 창에 사용자명 `meetinglog`, 비밀번호 `APP_PASSWORD`를 입력합니다.
+6. 앱을 열고 페이지의 로그인 화면에 `APP_PASSWORD`를 입력합니다. 사용자명은 입력하지 않습니다. 세션은 최대 12시간 유지되고 로그아웃 또는 서버 재시작 시 해제됩니다.
 
 키가 없어도 앱을 배포하고 샘플 회의·저장·내보내기를 확인할 수 있습니다. 실제 온라인 AI 변환·요약을 사용하려면 서비스의 **Environment** 화면에서 `OPENAI_API_KEY`를 추가하고 재배포하세요. 키는 GitHub 코드에 올리지 않습니다. API 키 없는 온라인 앱은 실제 AI 기능을 실행하지 않습니다.
 

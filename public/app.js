@@ -12,14 +12,17 @@ function providerStatus() {
 $('provider').onchange = () => { providerStatus(); status(provider() === 'local' ? '오프라인 모드입니다. 모델 최초 설치 후 인터넷 없이 사용할 수 있습니다.' : '클라우드 모드입니다. 인터넷 연결과 API 키가 필요합니다.'); };
 async function api(url, options = {}) {
   const res = await fetch(url, options); const data = await res.json();
-  if (!res.ok) throw new Error(data.error || '요청에 실패했습니다.');
+  if (!res.ok) {
+    if (res.status === 401 && url !== '/api/login') showLogin();
+    const error = new Error(data.error || '요청에 실패했습니다.'); error.status = res.status; throw error;
+  }
   return data;
 }
 const post = (url, value) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
 function status(message, error = false) { $('status').textContent = message; $('status').className = error ? 'error' : ''; }
 function setBusy(value) {
   busy = value;
-  for (const id of ['transcribe', 'summarize', 'save', 'demo', 'newMeeting', 'title', 'transcript', 'audio', 'language', 'audioTab', 'textTab', 'recommendTitle', 'applyTitle', 'provider']) $(id).disabled = value;
+  for (const id of ['transcribe', 'summarize', 'save', 'demo', 'newMeeting', 'title', 'transcript', 'audio', 'language', 'audioTab', 'textTab', 'recommendTitle', 'applyTitle', 'provider', 'logout']) $(id).disabled = value;
   document.querySelectorAll('.history button').forEach(b => b.disabled = value);
 }
 async function run(message, fn) {
@@ -163,11 +166,38 @@ $('download').onclick = () => {
   const link = element('a'); link.href = url; link.download = `${current.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')}.md`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); status('Markdown 파일을 내보냈습니다.');
 };
 $('copy').onclick = async () => { if (!current) return; try { await navigator.clipboard.writeText(markdown()); status('회의록을 클립보드에 복사했습니다.'); } catch { status('복사 권한이 없습니다. Markdown 내보내기를 사용해 주세요.', true); } };
-try {
+function showLogin() {
+  $('loginGate').hidden = false;
+  document.querySelectorAll('main, .sidebar').forEach(el => { el.inert = true; });
+  $('loginPassword').focus();
+}
+function hideLogin() {
+  $('loginGate').hidden = true;
+  document.querySelectorAll('main, .sidebar').forEach(el => { el.inert = false; });
+}
+$('loginForm').onsubmit = async e => {
+  e.preventDefault(); $('loginSubmit').disabled = true; $('loginError').textContent = '';
+  try {
+    await post('/api/login', { password: $('loginPassword').value });
+    $('loginPassword').value = '';
+    await initialize(); hideLogin(); status('워크스페이스에 접속했습니다.');
+  } catch (e) { $('loginError').textContent = e.message; }
+  finally { $('loginSubmit').disabled = false; }
+};
+$('logout').onclick = () => run('로그아웃하고 있습니다.', async () => {
+  if ($('transcript').value && !current?.id && !confirm('로그아웃할까요? 저장하지 않은 내용은 사라집니다.')) { status('취소했습니다.'); return; }
+  await post('/api/logout', {}); config = null;
+  $('title').value = ''; $('transcript').value = ''; $('audio').value = ''; selectedFile = null;
+  titleEdited = false; clearRecommendation(); updateChars(); invalidate(); $('history').replaceChildren(); $('count').textContent = '0';
+  $('logout').hidden = true; showLogin(); status('');
+});
+async function initialize() {
   config = await api('/api/config'); $('provider').value = config.defaultProvider || 'cloud';
+  $('logout').hidden = !config.requiresAuth;
   if (config.hosted) $('provider').querySelector('option[value="local"]').disabled = true;
   $('storageLabel').textContent = config.hosted ? '온라인 서버에 저장' : '내 PC에 저장';
   $('storageDescription').textContent = config.hosted ? '중요한 회의록은 파일로도 내보내세요' : '나만의 로컬 워크스페이스';
   providerStatus();
   await history();
-} catch (e) { status(e.message, true); }
+}
+try { await initialize(); } catch (e) { if (e.status !== 401) status(e.message, true); }

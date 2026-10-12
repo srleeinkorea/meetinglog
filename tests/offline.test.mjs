@@ -36,11 +36,34 @@ test('hosted deployment requires authentication, matching origin and cloud provi
   const request = await app(t, { appOrigin: 'https://meetinglog.example', password, localAI: { status: async () => { throw new Error('Hosted app cannot use local AI'); } } });
   assert.equal((await request('/healthz')).status, 200);
   const headers = { Host: 'meetinglog.example' };
-  let response = await request('/api/config', { headers }); assert.equal(response.status, 401); assert.ok(response.headers.get('www-authenticate'));
+  let response = await request('/api/config', { headers }); assert.equal(response.status, 401); assert.equal(response.headers.get('www-authenticate'), null);
+  assert.equal((await request('/', { headers })).status, 200);
+  assert.equal((await request('/app.js', { headers })).status, 200);
   headers.Authorization = 'Basic ' + Buffer.from(`meetinglog:${password}`).toString('base64');
   response = await request('/api/config', { headers }); assert.equal(response.status, 200); const config = await response.json(); assert.equal(config.hosted, true); assert.equal(config.local, null);
   response = await request('/api/config', { headers: { ...headers, Origin: 'https://evil.example' } }); assert.equal(response.status, 403);
   response = await request('/api/summarize', { ...json({ transcript: '충분히 긴 회의 원문입니다.', provider: 'local' }), headers: { ...headers, 'Content-Type': 'application/json', Origin: 'https://meetinglog.example' } }); assert.equal(response.status, 400);
+});
+test('in-page login creates a protected session, rejects tampering, expires and logs out', async t => {
+  let time = Date.now(); const password = 'a-long-test-password';
+  const request = await app(t, { appOrigin: 'https://meetinglog.example', password, now: () => time });
+  const headers = { Host: 'meetinglog.example', Origin: 'https://meetinglog.example', 'Content-Type': 'application/json' };
+  const login = value => request('/api/login', { ...json({ password: value }), headers });
+  assert.equal((await login('wrong')).status, 401);
+  assert.equal((await request('/api/login', { ...json({ password }), headers: { ...headers, Origin: 'https://evil.example' } })).status, 403);
+  let response = await login(password); assert.equal(response.status, 200);
+  const setCookie = response.headers.get('set-cookie'); assert.match(setCookie, /HttpOnly/); assert.match(setCookie, /Secure/); assert.match(setCookie, /SameSite=Strict/);
+  let session = setCookie.split(';')[0];
+  response = await request('/api/config', { headers: { ...headers, Cookie: session } }); assert.equal(response.status, 200); assert.equal((await response.json()).requiresAuth, true);
+  assert.equal((await request('/api/config', { headers: { ...headers, Cookie: session + 'x' } })).status, 401);
+  time += 12 * 60 * 60 * 1000 + 1;
+  assert.equal((await request('/api/config', { headers: { ...headers, Cookie: session } })).status, 401);
+  response = await login(password); session = response.headers.get('set-cookie').split(';')[0];
+  response = await request('/api/logout', { method: 'POST', headers: { ...headers, Cookie: session } }); assert.equal(response.status, 200); assert.match(response.headers.get('set-cookie'), /Max-Age=0/);
+  assert.equal((await request('/api/config', { headers: { ...headers, Cookie: session } })).status, 401);
+  for (let i = 0; i < 8; i++) assert.equal((await login('wrong')).status, 401);
+  assert.equal((await login(password)).status, 429);
+  time += 10 * 60 * 1000 + 1; assert.equal((await login(password)).status, 200);
 });
 test('local model calls loopback with JSON schema and never accepts a remote endpoint', async () => {
   let called;
