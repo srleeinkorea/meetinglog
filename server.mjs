@@ -35,7 +35,7 @@ async function body(req, limit) {
 async function jsonBody(req) { try { return JSON.parse((await body(req, 600_000)).toString()); } catch (e) { if (e.status) throw e; throw new AppError(400, '올바른 JSON 요청이 필요합니다.'); } }
 function reply(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); }
 
-export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'data'), apiKey = process.env.OPENAI_API_KEY, fetchImpl = fetch, localAI = createLocalAI(), appOrigin = process.env.APP_ORIGIN, password = process.env.APP_PASSWORD } = {}) {
+export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'data'), apiKey = process.env.OPENAI_API_KEY, fetchImpl = fetch, localAI = createLocalAI(), appOrigin = process.env.APP_ORIGIN || process.env.RENDER_EXTERNAL_URL, password = process.env.APP_PASSWORD } = {}) {
   const deploymentOrigin = appOrigin ? new URL(appOrigin).origin : null;
   function provider(input) {
     const choice = input || process.env.AI_PROVIDER || 'cloud';
@@ -150,10 +150,11 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 3000);
   const listenHost = process.env.HOST || '127.0.0.1';
-  if (listenHost !== '127.0.0.1' && (!process.env.APP_ORIGIN || !process.env.APP_PASSWORD || process.env.APP_PASSWORD.length < 16)) {
+  const externalOrigin = process.env.APP_ORIGIN || process.env.RENDER_EXTERNAL_URL;
+  if (listenHost !== '127.0.0.1' && (!externalOrigin || !process.env.APP_PASSWORD || process.env.APP_PASSWORD.length < 16)) {
     throw new Error('외부 접속에는 APP_ORIGIN과 16자 이상의 APP_PASSWORD가 필요합니다.');
   }
   const server = createApp(); server.requestTimeout = 1_860_000;
   server.on('error', e => { console.error(e.code === 'EADDRINUSE' ? '포트를 사용 중입니다. .env의 PORT 값을 변경해 주세요.' : '서버 시작 실패:', e.code); process.exitCode = 1; });
-  server.listen(port, listenHost, () => console.log(`Meetinglog: ${process.env.APP_ORIGIN || `http://localhost:${port}`}`));
+  server.listen(port, listenHost, () => console.log(`Meetinglog: ${externalOrigin || `http://localhost:${port}`}`));
 }

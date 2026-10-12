@@ -8,10 +8,12 @@ GitHub 저장소는 소스 코드를 보관합니다. Node 서버와 AI API를 �
 
 1. Render 계정을 만들고 GitHub 계정으로 로그인합니다.
 2. 위 링크로 Blueprint를 생성합니다. `render.yaml`은 무료 플랜을 사용합니다.
-3. `OPENAI_API_KEY`에는 본인 키를 넣습니다. 키는 GitHub 코드에 올리지 않습니다.
-4. `APP_ORIGIN`에는 Render가 해당 서비스에 지정한 실제 HTTPS URL을 넣습니다. 예: `https://meetinglog-xxxx.onrender.com`. 정확한 URL은 서비스 화면에서 확인합니다. 처음에는 임시 HTTPS 주소로 생성한 뒤 실제 주소로 바꾸고 재배포할 수 있습니다.
+3. Blueprint 이름은 `meetinglog`, Branch는 `main`, Blueprint Path는 `render.yaml`로 두고 배포합니다. 추가 필수 입력값은 없습니다.
+4. 서비스 주소는 Render의 `RENDER_EXTERNAL_URL`에서 자동으로 감지합니다. 별도 `APP_ORIGIN` 입력이 필요하지 않습니다. 사용자 지정 도메인은 `APP_ORIGIN`으로 지정하세요.
 5. 생성된 `APP_PASSWORD`를 Render 환경변수 화면에서 확인합니다.
 6. 앱을 열고 브라우저 로그인 창에 사용자명 `meetinglog`, 비밀번호 `APP_PASSWORD`를 입력합니다.
+
+키가 없어도 앱을 배포하고 샘플 회의·저장·내보내기를 확인할 수 있습니다. 실제 온라인 AI 변환·요약을 사용하려면 서비스의 **Environment** 화면에서 `OPENAI_API_KEY`를 추가하고 재배포하세요. 키는 GitHub 코드에 올리지 않습니다. API 키 없는 온라인 앱은 실제 AI 기능을 실행하지 않습니다.
 
 서버는 이 앱 주소의 요청만 받으며, 키와 회의록 접근에 비밀번호가 필요합니다. 인터넷 공개 주소에서 비밀번호를 해제하지 마세요. 한 사람/신뢰하는 소규모 그룹의 공유 워크스페이스이며 사용자별 데이터 분리는 없습니다.
 

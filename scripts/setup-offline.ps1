@@ -37,20 +37,12 @@ if (-not (Test-Path -LiteralPath (Join-Path $whisperRoot 'whisper-cli.exe'))) {
     Get-Download 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.3/whisper-bin-x64.zip' $archive
     Expand-Archive -LiteralPath $archive -DestinationPath $whisperRoot -Force
 }
-$ffmpegRoot = Join-Path $runtimeRoot 'ffmpeg'
-if (-not (Test-Path -LiteralPath $ffmpegRoot)) {
-    $archive = Join-Path $runtimeRoot 'ffmpeg.zip'
-    Get-Download 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' $archive
-    Expand-Archive -LiteralPath $archive -DestinationPath $ffmpegRoot -Force
-}
-$whisperModel = Join-Path $runtimeRoot 'ggml-small.bin'
-Get-Download 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin' $whisperModel
-$whisperExe = Get-ChildItem -LiteralPath $whisperRoot -Filter 'whisper-cli.exe' -Recurse | Select-Object -First 1
-$ffmpegExe = Get-ChildItem -LiteralPath $ffmpegRoot -Filter 'ffmpeg.exe' -Recurse | Select-Object -First 1
-if (-not $whisperExe -or -not $ffmpegExe) { throw 'Offline executable not found after extraction.' }
 $env:OLLAMA_MODELS = Join-Path $runtimeRoot 'models'
 $env:OLLAMA_HOST = '127.0.0.1:11434'
 $env:OLLAMA_NO_CLOUD = '1'
+$env:OLLAMA_VULKAN = 'false'
+$env:CUDA_VISIBLE_DEVICES = '-1'
+$env:HIP_VISIBLE_DEVICES = '-1'
 $ollamaExe = Join-Path $ollamaRoot 'ollama.exe'
 try { $null = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 3 }
 catch {
@@ -62,8 +54,22 @@ catch {
     }
     if (-not $ready) { throw 'Ollama server did not start. Check runtime/ollama.stderr.log.' }
 }
-& $ollamaExe pull $SummaryModel
-if ($LASTEXITCODE -ne 0) { throw 'Ollama model download failed.' }
+Write-Output ('Downloading summary model: ' + $SummaryModel)
+$pullProcess = Start-Process -FilePath $ollamaExe -ArgumentList @('pull', $SummaryModel) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runtimeRoot 'model-pull.stdout.log') -RedirectStandardError (Join-Path $runtimeRoot 'model-pull.stderr.log')
+$ffmpegRoot = Join-Path $runtimeRoot 'ffmpeg'
+$ffmpegExe = Get-ChildItem -LiteralPath $ffmpegRoot -Filter 'ffmpeg.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $ffmpegExe) {
+    $archive = Join-Path $runtimeRoot 'ffmpeg.zip'
+    Get-Download 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' $archive
+    Expand-Archive -LiteralPath $archive -DestinationPath $ffmpegRoot -Force
+}
+$whisperModel = Join-Path $runtimeRoot 'ggml-small.bin'
+Get-Download 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin' $whisperModel
+$whisperExe = Get-ChildItem -LiteralPath $whisperRoot -Filter 'whisper-cli.exe' -Recurse | Select-Object -First 1
+$ffmpegExe = Get-ChildItem -LiteralPath $ffmpegRoot -Filter 'ffmpeg.exe' -Recurse | Select-Object -First 1
+if (-not $whisperExe -or -not $ffmpegExe) { throw 'Offline executable not found after extraction.' }
+$pullProcess.WaitForExit()
+if ($pullProcess.ExitCode -ne 0) { throw 'Ollama model download failed. See runtime/model-pull.stderr.log.' }
 $envFile = Join-Path $projectRoot '.env'
 $existing = if (Test-Path -LiteralPath $envFile) { [IO.File]::ReadAllLines($envFile) } else { @() }
 $updates = [ordered]@{AI_PROVIDER='local'; WHISPER_BIN=$whisperExe.FullName.Replace('\','/'); WHISPER_MODEL=$whisperModel.Replace('\','/'); FFMPEG_BIN=$ffmpegExe.FullName.Replace('\','/'); OLLAMA_URL='http://127.0.0.1:11434'; OLLAMA_MODEL=$SummaryModel}
