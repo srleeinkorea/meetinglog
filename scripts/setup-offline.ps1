@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
 function Get-Download([string]$Uri, [string]$Target) {
     if (Test-Path -LiteralPath $Target) { return }
     Write-Output ('Downloading: ' + [IO.Path]::GetFileName($Target))
-    & curl.exe --fail --location --retry 3 --continue-at - --output ($Target + '.part') $Uri
+    & curl.exe --silent --show-error --fail --location --retry 3 --continue-at - --output ($Target + '.part') $Uri
     if ($LASTEXITCODE -ne 0) { throw ('Download failed: ' + [IO.Path]::GetFileName($Target)) }
     Move-Item -LiteralPath ($Target + '.part') -Destination $Target
 }
@@ -17,7 +17,19 @@ $ollamaRoot = Join-Path $runtimeRoot 'ollama'
 if (-not (Test-Path -LiteralPath (Join-Path $ollamaRoot 'ollama.exe'))) {
     $archive = Join-Path $runtimeRoot 'ollama.zip'
     Get-Download 'https://github.com/ollama/ollama/releases/download/v0.40.3/ollama-windows-amd64.zip' $archive
-    Expand-Archive -LiteralPath $archive -DestinationPath $ollamaRoot -Force
+    # The CPU package avoids extracting large NVIDIA libraries on PCs without NVIDIA GPUs.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($archive)
+    try {
+        $destinationRoot = [IO.Path]::GetFullPath($ollamaRoot) + [IO.Path]::DirectorySeparatorChar
+        foreach ($entry in $zip.Entries) {
+            if ($entry.FullName -match '^lib/ollama/(cuda|rocm|vulkan|mlx)' -or $entry.FullName.EndsWith('/')) { continue }
+            $target = [IO.Path]::GetFullPath((Join-Path $ollamaRoot $entry.FullName))
+            if (-not $target.StartsWith($destinationRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe archive path.' }
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target)) | Out-Null
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+        }
+    } finally { $zip.Dispose() }
 }
 $whisperRoot = Join-Path $runtimeRoot 'whisper'
 if (-not (Test-Path -LiteralPath (Join-Path $whisperRoot 'whisper-cli.exe'))) {

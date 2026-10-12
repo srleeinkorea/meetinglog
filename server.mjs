@@ -44,7 +44,7 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
     return choice;
   }
   async function upstream(endpoint, options) {
-    assert(apiKey, 'API 키가 없습니다. .env에 OPENAI_API_KEY를 설정하고 서버를 다시 실행해 주세요.', 503);
+    assert(apiKey, deploymentOrigin ? '온라인 서버에 API 키가 없습니다. Render의 OPENAI_API_KEY 환경변수를 설정해 주세요.' : 'API 키가 없습니다. .env에 OPENAI_API_KEY를 설정하거나 오프라인 AI를 선택해 주세요.', 503);
     let response;
     try { response = await fetchImpl(`https://api.openai.com/v1/${endpoint}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(180_000) }); }
     catch { throw new AppError(504, 'API 연결이 지연되거나 실패했습니다. 잠시 후 다시 시도해 주세요.'); }
@@ -113,7 +113,7 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
           const output = result.output?.flatMap(o => o.content || []).filter(c => c.type === 'output_text').map(c => c.text).join('');
           try { generated = JSON.parse(output); } catch { throw new AppError(502, '생성 결과를 읽지 못했습니다. 다시 시도해 주세요.'); }
         }
-        assert(typeof generated.recommendedTitle === 'string' && generated.recommendedTitle.trim().length > 0 && generated.recommendedTitle.trim().length <= 60, '추천 제목 형식이 올바르지 않습니다.', 502);
+        assert(generated && typeof generated.recommendedTitle === 'string' && generated.recommendedTitle.trim().length > 0 && generated.recommendedTitle.trim().length <= 60, '추천 제목 형식이 올바르지 않습니다.', 502);
         const recommendedTitle = generated.recommendedTitle.trim();
         return reply(res, 200, titleOnly ? { recommendedTitle } : { recommendedTitle, summary: validateSummary(generated.summary) });
       }

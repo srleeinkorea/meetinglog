@@ -151,7 +151,7 @@ async function history() {
 $('save').onclick = () => run('이 PC에 회의록을 저장하고 있습니다.', async () => {
   if (!current) return;
   if (current.id) { status('이미 저장한 회의록입니다.'); return; }
-  current = await post('/api/meetings', current); render(); await history(); status('회의록을 이 PC에 저장했습니다.');
+  current = await post('/api/meetings', current); render(); await history(); status(config?.hosted ? '회의록을 온라인 서버에 저장했습니다. 중요한 내용은 파일로도 내보내세요.' : '회의록을 이 PC에 저장했습니다.');
 });
 function markdown() {
   const s = current.summary;
@@ -166,6 +166,8 @@ $('copy').onclick = async () => { if (!current) return; try { await navigator.cl
 try {
   config = await api('/api/config'); $('provider').value = config.defaultProvider || 'cloud';
   if (config.hosted) $('provider').querySelector('option[value="local"]').disabled = true;
+  $('storageLabel').textContent = config.hosted ? '온라인 서버에 저장' : '내 PC에 저장';
+  $('storageDescription').textContent = config.hosted ? '중요한 회의록은 파일로도 내보내세요' : '나만의 로컬 워크스페이스';
   providerStatus();
   await history();
 } catch (e) { status(e.message, true); }
