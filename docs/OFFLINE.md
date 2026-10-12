@@ -15,6 +15,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-offline.ps1
 
 ## 매번 실행
 
+프로젝트 폴더의 `start-offline.cmd`를 더블클릭하거나 아래 명령을 실행합니다. Node.js가 PATH에 없다면 설치된 Codex의 번들 Node 런타임을 사용합니다. 다른 PC에서는 Node.js 22 이상을 설치하세요.
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-offline.ps1
 ```
@@ -41,3 +43,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-offline.ps1 -S
 ```
 
 공식 참고: [Whisper.cpp](https://github.com/ggml-org/whisper.cpp), [Ollama Windows](https://docs.ollama.com/windows), [Ollama API](https://docs.ollama.com/api/generate), [Qwen2.5 모델](https://ollama.com/library/qwen2.5:3b), [FFmpeg 다운로드](https://ffmpeg.org/download.html).
+
+## 실제 실행 검증
+
+2026-10-12 Windows PC에서 한국어 합성 음성 17초를 웹앱에 업로드하고 로컬 Whisper 전사 → Qwen 제목 추천·요약까지 약 25초에 처리했습니다. 이름과 상대 기한 추출도 확인했습니다. 클라우드 API 키 없이 로컬 실행 경로를 사용했습니다. 실제 회의 녹음의 잡음·길이·발화 겹침에 따른 정확도와 처리 시간은 별도로 확인해야 합니다.

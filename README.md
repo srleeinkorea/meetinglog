@@ -1,8 +1,10 @@
 # Meetinglog
 
-[GitHub 저장소](https://github.com/srleeinkorea/meetinglog) · [Render로 온라인 배포](https://render.com/deploy?repo=https://github.com/srleeinkorea/meetinglog)
+[온라인 앱](https://meetinglog.onrender.com) · [GitHub 저장소](https://github.com/srleeinkorea/meetinglog) · [Render로 온라인 배포](https://render.com/deploy?repo=https://github.com/srleeinkorea/meetinglog)
 
 **온라인 + 완전 오프라인 AI 실행을 지원합니다.** 화면의 AI 실행 방식에서 클라우드(OpenAI)와 오프라인(Whisper.cpp + Ollama)을 선택합니다. 온라인 배포 서버는 클라우드 AI를, PC는 둘 중 원하는 방식을 사용합니다. 인터넷 없이 STT·제목 추천·요약까지 처리하려면 [오프라인 설치 안내](docs/OFFLINE.md)를 따라 모델을 한 번 다운로드하세요. API 키가 필요하지 않습니다. 온라인 URL 생성은 [Render 배포 안내](docs/DEPLOYMENT.md)를 참고하세요.
+
+초기 설치 후 Windows에서는 `start-offline.cmd`를 더블클릭해 실행할 수 있습니다. 온라인 앱 로그인은 사용자명 `meetinglog`와 Render에서 생성한 `APP_PASSWORD`를 사용합니다. 실제 온라인 AI는 서비스에 OpenAI API 키를 설정해야 사용할 수 있습니다.
 
 상용 OpenAI STT로 회의 음성을 텍스트로 바꾸고 핵심 내용, 결정 사항, 담당자·기한이 있는 할 일을 정리하는 로컬 웹앱 MVP입니다. 한국어 UI, 원문 편집, 회의록 저장·조회·삭제, Markdown 내보내기 및 복사를 제공합니다.
 

@@ -118,7 +118,7 @@ function render() {
 function load(meeting) { titleEdited = true; clearRecommendation(); current = meeting; $('title').value = meeting.title; $('transcript').value = meeting.transcript; updateChars(); render(); }
 $('demo').onclick = () => run('샘플을 불러오고 있습니다.', async () => {
   if (($('transcript').value || current) && !confirm('현재 화면을 샘플 회의로 바꿀까요? 저장하지 않은 내용은 사라집니다.')) { status('취소했습니다.'); return; }
-  load(await api('/api/demo')); tab(false); status('샘플은 미리 준비한 고정 결과입니다. 실제 AI 변환·요약은 API 키 설정 후 사용할 수 있습니다.');
+  load(await api('/api/demo')); tab(false); status('샘플은 미리 준비한 고정 결과입니다. 실제 AI는 클라우드 API 키 또는 설치된 오프라인 모델로 실행합니다.');
 });
 $('newMeeting').onclick = () => {
   if (busy) return;

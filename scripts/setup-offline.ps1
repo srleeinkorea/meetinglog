@@ -69,7 +69,9 @@ $whisperExe = Get-ChildItem -LiteralPath $whisperRoot -Filter 'whisper-cli.exe' 
 $ffmpegExe = Get-ChildItem -LiteralPath $ffmpegRoot -Filter 'ffmpeg.exe' -Recurse | Select-Object -First 1
 if (-not $whisperExe -or -not $ffmpegExe) { throw 'Offline executable not found after extraction.' }
 $pullProcess.WaitForExit()
-if ($pullProcess.ExitCode -ne 0) { throw 'Ollama model download failed. See runtime/model-pull.stderr.log.' }
+$pullProcess.Refresh()
+$installedModels = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 10
+if (-not @($installedModels.models | Where-Object { $_.name -eq $SummaryModel }).Count) { throw 'Ollama model download failed. See runtime/model-pull.stderr.log.' }
 $envFile = Join-Path $projectRoot '.env'
 $existing = if (Test-Path -LiteralPath $envFile) { [IO.File]::ReadAllLines($envFile) } else { @() }
 $updates = [ordered]@{AI_PROVIDER='local'; WHISPER_BIN=$whisperExe.FullName.Replace('\','/'); WHISPER_MODEL=$whisperModel.Replace('\','/'); FFMPEG_BIN=$ffmpegExe.FullName.Replace('\','/'); OLLAMA_URL='http://127.0.0.1:11434'; OLLAMA_MODEL=$SummaryModel}

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, writeFile, readFile, rm, access } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, access, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -32,7 +32,10 @@ export function createLocalAI({ fetchImpl = fetch, env = process.env } = {}) {
     async transcribe(file, language) {
       return exclusive(async () => {
         if (!await available()) fail(503, '오프라인 STT가 준비되지 않았습니다. scripts/setup-offline.ps1을 먼저 실행해 주세요.');
-        const temp = await mkdtemp(path.join(os.tmpdir(), 'meetinglog-audio-'));
+        // whisper.cpp Windows binaries can fail on a Unicode user-profile temp path.
+        const tempRoot = env.LOCAL_TEMP_DIR || path.join(path.dirname(env.WHISPER_MODEL), 'tmp');
+        await mkdir(tempRoot, { recursive: true });
+        const temp = await mkdtemp(path.join(tempRoot, 'meetinglog-audio-'));
         try {
           const wav = path.join(temp, 'input.wav'); const output = path.join(temp, 'transcript');
           // Distinct names prevent ffmpeg from trying to overwrite a WAV input.
@@ -52,7 +55,7 @@ export function createLocalAI({ fetchImpl = fetch, env = process.env } = {}) {
         let res;
         try {
           res = await fetchImpl(`${ollamaURL()}/api/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(900_000),
-            body: JSON.stringify({ model: env.OLLAMA_MODEL || 'qwen2.5:3b', system: instructions + ' 결과는 지정한 JSON 형식으로만 출력하세요.', prompt: input, format: schema, stream: false, keep_alive: '5m', options: { temperature: 0.1, num_ctx: 16384, num_predict: 3500 } }) });
+            body: JSON.stringify({ model: env.OLLAMA_MODEL || 'qwen2.5:3b', system: instructions + ' 모든 문자열은 한국어로 작성하고 지정한 JSON 형식으로만 출력하세요. actions의 task에는 할 일만, owner에는 명시된 담당자 이름만, due에는 명시된 기한만 각각 넣으세요. 명시된 이름이나 기한을 미정으로 바꾸지 마세요. 예: "영희가 월요일까지 보고서를 공유한다"이면 task="보고서 공유", owner="영희", due="월요일"입니다. 이 예시를 결과에 포함하지 마세요.', prompt: input, format: schema, stream: false, keep_alive: '5m', options: { temperature: 0.1, num_ctx: 16384, num_predict: 3500 } }) });
         } catch (e) { if (e.status) throw e; fail(503, '로컬 요약 서버에 연결할 수 없습니다. scripts/start-offline.ps1을 실행해 주세요.'); }
         if (res.status === 404) fail(503, '로컬 요약 모델이 없습니다. 오프라인 초기 설치를 완료해 주세요.');
         if (!res.ok) fail(502, '로컬 요약 모델 실행에 실패했습니다.');

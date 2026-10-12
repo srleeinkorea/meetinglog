@@ -13,4 +13,10 @@ try { $null = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutS
 catch { Start-Process -FilePath $ollamaExe -ArgumentList 'serve' -WorkingDirectory (Split-Path $ollamaExe) -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtimeRoot 'ollama.stdout.log') -RedirectStandardError (Join-Path $runtimeRoot 'ollama.stderr.log') | Out-Null; Start-Sleep -Seconds 3 }
 Set-Location -LiteralPath $projectRoot
 $env:AI_PROVIDER = 'local'
-& node --env-file-if-exists=.env server.mjs
+$nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+if ($nodeCommand) { $nodeExe = $nodeCommand.Source }
+else {
+    $nodeExe = Join-Path $env:USERPROFILE '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe'
+    if (-not (Test-Path -LiteralPath $nodeExe)) { throw 'Install Node.js 22 or newer before starting Meetinglog.' }
+}
+& $nodeExe --env-file-if-exists=.env server.mjs
