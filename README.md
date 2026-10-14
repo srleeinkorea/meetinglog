@@ -56,7 +56,7 @@ API 키가 없어도 **샘플 회의 살펴보기**로 고정 예시의 저장·
 
 기본 STT는 `gpt-4o-transcribe`, 요약은 `gpt-4o-mini`입니다. `.env`에서 교체할 수 있지만 STT는 `json` 응답을 지원하는 전사 모델, 요약은 Responses API의 strict JSON Schema를 지원하는 모델을 사용해야 합니다. API 사용에는 계정의 모델 접근 권한과 별도 비용이 필요합니다.
 
-파일은 최대 25,000,000바이트이며 MP3, MP4, MPEG, MPGA, M4A, WAV, WEBM을 지원합니다. 원문은 최대 80,000자입니다. 긴 녹음은 압축하거나 문장 경계를 고려해 여러 파일로 나눠 처리하세요. 자동 분할·합치기, 실시간 녹음, 화자 구분, 계정 인증, 팀 공유 및 여러 STT 제공업체 선택은 이 MVP에 포함하지 않았습니다. 담당자·기한은 원문에 없으면 미정, 상대 날짜는 그대로 남깁니다.
+음성 파일은 오프라인 최대 200,000,000바이트(200 MB), 클라우드 최대 25,000,000바이트(25 MB)이며 MP3, MP4, MPEG, MPGA, M4A, WAV, WEBM을 지원합니다. 원문은 클라우드 최대 80,000자, 오프라인 최대 12,000자입니다. 긴 녹음은 압축하거나 여러 파일로 나눠 처리하세요. 자동 분할·합치기, 실시간 녹음, 화자 구분, 팀 공유 및 여러 STT 제공업체 선택은 이 MVP에 포함하지 않았습니다. 담당자·기한은 원문에 없으면 미정, 상대 날짜는 그대로 남깁니다.
 
 공식 API 문서: [음성 전사](https://developers.openai.com/api/docs/guides/speech-to-text), [구조화된 출력](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses).
 

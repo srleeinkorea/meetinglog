@@ -59,6 +59,22 @@ test('stream errors terminate the response safely; invalid input stays a normal 
   options.body = JSON.stringify({ transcript: '', provider: 'local' }); response = await request('/api/summarize', options);
   assert.equal(response.status, 400); assert.match(response.headers.get('content-type'), /application\/json/);
 });
+
+test('recordings above 25 MB reach local STT while cloud retains its smaller limit', async t => {
+  let called = 0;
+  const request = await app(t, { apiKey: '', localAI: {
+    status: async () => ({ sttReady: true, summaryReady: true }),
+    transcribe: async file => { called++; assert.equal(file.size, 25_000_001); return '큰 녹음의 회의 원문입니다.'; }
+  } });
+  const config = await (await request('/api/config')).json(); assert.equal(config.maxLocalAudioBytes, 200_000_000); assert.equal(config.maxAudioBytes, 25_000_000);
+  const file = new File([new Uint8Array(25_000_001)], 'long.wav');
+  for (const provider of ['local', 'cloud']) {
+    const form = new FormData(); form.append('audio', file); form.append('provider', provider);
+    const response = await request('/api/transcribe', { method: 'POST', body: form });
+    assert.equal(response.status, provider === 'local' ? 200 : 413);
+  }
+  assert.equal(called, 1);
+});
 test('hosted deployment requires authentication, matching origin and cloud provider', async t => {
   const password = 'a-long-test-password';
   const request = await app(t, { appOrigin: 'https://meetinglog.example', password, localAI: { status: async () => { throw new Error('Hosted app cannot use local AI'); } } });

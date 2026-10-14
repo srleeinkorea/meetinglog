@@ -7,6 +7,7 @@ import { createLocalAI } from './local-ai.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const MAX_AUDIO = 25_000_000;
+const MAX_LOCAL_AUDIO = 200_000_000;
 const string = { type: 'string' };
 const strings = { type: 'array', items: string };
 export const summarySchema = {
@@ -143,17 +144,19 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
           return reply(res, 401, { error: '워크스페이스에 접속하려면 로그인해 주세요.' });
         }
       }
-      if (req.method === 'GET' && route === '/api/config') return reply(res, 200, { configured: Boolean(apiKey), requiresAuth, defaultProvider: provider(), local: deploymentOrigin ? null : await localAI.status(), hosted: Boolean(deploymentOrigin), sttModel: process.env.STT_MODEL || 'gpt-4o-transcribe', summaryModel: process.env.SUMMARY_MODEL || 'gpt-4o-mini', maxAudioBytes: MAX_AUDIO, maxLocalCharacters: 12000 });
+      if (req.method === 'GET' && route === '/api/config') return reply(res, 200, { configured: Boolean(apiKey), requiresAuth, defaultProvider: provider(), local: deploymentOrigin ? null : await localAI.status(), hosted: Boolean(deploymentOrigin), sttModel: process.env.STT_MODEL || 'gpt-4o-transcribe', summaryModel: process.env.SUMMARY_MODEL || 'gpt-4o-mini', maxAudioBytes: MAX_AUDIO, maxLocalAudioBytes: MAX_LOCAL_AUDIO, maxLocalCharacters: 12000 });
       if (req.method === 'GET' && route === '/api/demo') return reply(res, 200, { title: '회의록 서비스 MVP 기획 회의', transcript: sampleTranscript, summary: sampleSummary, demo: true });
       if (req.method === 'POST' && route === '/api/transcribe') {
-        const bytes = await body(req, MAX_AUDIO + 100_000);
+        const bytes = await body(req, (deploymentOrigin ? MAX_AUDIO : MAX_LOCAL_AUDIO) + 100_000);
         let form; try { form = await new Request('http://localhost/upload', { method: 'POST', headers: { 'Content-Type': req.headers['content-type'] || '' }, body: bytes }).formData(); } catch { throw new AppError(400, '올바른 음성 파일 업로드가 필요합니다.'); }
         const file = form.get('audio');
         assert(file && typeof file.name === 'string' && file.size > 0, '음성 파일을 선택해 주세요.');
-        assert(file.size <= MAX_AUDIO, '음성 파일은 최대 25 MB까지 업로드할 수 있습니다.', 413);
+        const chosenProvider = provider(form.get('provider'));
+        const maxAudio = chosenProvider === 'local' ? MAX_LOCAL_AUDIO : MAX_AUDIO;
+        assert(file.size <= maxAudio, `${chosenProvider === 'local' ? '오프라인' : '클라우드'} 음성 파일은 최대 ${maxAudio / 1_000_000} MB까지 업로드할 수 있습니다.`, 413);
         assert(/\.(mp3|mp4|mpeg|mpga|m4a|wav|webm)$/i.test(file.name), '지원하지 않는 파일 형식입니다.');
         const language = form.get('language');
-        if (provider(form.get('provider')) === 'local') return reply(res, 200, { transcript: await localAI.transcribe(file, language, progress) });
+        if (chosenProvider === 'local') return reply(res, 200, { transcript: await localAI.transcribe(file, language, progress) });
         progress('클라우드 AI가 음성을 텍스트로 변환하고 있습니다.');
         const payload = new FormData(); payload.append('file', file); payload.append('model', process.env.STT_MODEL || 'gpt-4o-transcribe'); payload.append('response_format', 'json');
         if (language === 'ko' || language === 'en') payload.append('language', language);

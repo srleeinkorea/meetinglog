@@ -13,6 +13,7 @@ async function ui({ requireLogin = false, aiResponse } = {}) {
     append(...nodes) { this.children.push(...nodes); }
     replaceChildren(...nodes) { this.children = nodes; }
     setAttribute() {} addEventListener() {} focus() {}
+    click() { this.clicks = (this.clicks || 0) + 1; }
   }
   const elements = new Map([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
   const $ = id => { assert.ok(elements.has(id), `Missing element: ${id}`); return elements.get(id); };
@@ -86,4 +87,18 @@ test('progress is visible before completion, handles split Korean text, and clea
   assert.equal($('processingDetail').textContent, '모델을 시작해 주세요.');
   assert.equal($('processingTrack').hidden, true); assert.equal($('summarize').disabled, false);
   assert.equal($('transcript').value, '음성 업로드 기반 MVP의 기능 범위와 역할을 정하기로 했습니다.');
+});
+
+test('offline accepts a 100 MB recording, shows exact rejection reasons, and never reuses a rejected file', async () => {
+  const { $ } = await ui();
+  $('provider').value = 'local'; $('provider').onchange();
+  assert.match($('uploadLimit').textContent, /200 MB/);
+  $('audio').onchange({ target: { files: [{ name: 'meeting.wav', size: 100_000_000 }] } });
+  assert.equal($('uploadError').hidden, true); assert.match($('fileLabel').textContent, /100.0 MB/);
+  $('provider').value = 'cloud'; $('provider').onchange();
+  assert.match($('uploadError').textContent, /100.0 MB/); assert.match($('uploadError').textContent, /25 MB/);
+  await $('transcribe').onclick(); assert.equal($('audio').clicks, 1); assert.equal($('transcribe').disabled, undefined);
+  $('audio').onchange({ target: { files: [{ name: 'empty.wav', size: 0 }] } }); assert.match($('uploadError').textContent, /0바이트/);
+  $('provider').value = 'local'; $('provider').onchange();
+  $('audio').onchange({ target: { files: [{ name: 'huge.wav', size: 200_000_001 }] } }); assert.match($('uploadError').textContent, /최대 200 MB/);
 });

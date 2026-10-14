@@ -3,14 +3,16 @@ let current = null, selectedFile = null, busy = false, titleEdited = false, reco
 let config = null;
 let processingTimer = null, processingStarted = 0, processingFailed = false;
 const provider = () => $('provider').value || 'cloud';
+const maxAudioBytes = () => provider() === 'local' ? (config?.maxLocalAudioBytes || 200_000_000) : (config?.maxAudioBytes || 25_000_000);
 function providerStatus() {
   const local = provider() === 'local';
   $('providerStatus').textContent = local ? (config?.local?.sttReady && config?.local?.summaryReady ? '● 로컬 모델 준비 완료 · 인터넷 없이 실행' : '로컬 모델 설치 또는 시작 필요') : (config?.configured ? '● 클라우드 API 키 설정됨' : '클라우드 API 키 설정 필요');
   $('privacy').textContent = local ? '오프라인 AI는 음성과 원문을 이 PC에서만 처리합니다. 음성 임시 파일은 처리 후 삭제합니다.' : '음성·원문은 처리 시 OpenAI로 전송됩니다. 음성 파일은 저장하지 않습니다.';
   $('apiStatus').textContent = local ? '오프라인 AI' : '클라우드 AI';
   $('transcript').maxLength = local ? 12000 : 80000;
+  $('uploadLimit').textContent = `MP3, M4A, WAV, WEBM 등 · 최대 ${maxAudioBytes() / 1_000_000} MB`;
 }
-$('provider').onchange = () => { providerStatus(); status(provider() === 'local' ? '오프라인 모드입니다. 모델 최초 설치 후 인터넷 없이 사용할 수 있습니다.' : '클라우드 모드입니다. 인터넷 연결과 API 키가 필요합니다.'); };
+$('provider').onchange = () => { providerStatus(); status(provider() === 'local' ? '오프라인 모드입니다. 모델 최초 설치 후 인터넷 없이 사용할 수 있습니다.' : '클라우드 모드입니다. 인터넷 연결과 API 키가 필요합니다.'); if (selectedFile) selectFile(selectedFile); };
 async function api(url, options = {}) {
   const withProgress = busy && ['/api/transcribe', '/api/recommend-title', '/api/summarize'].includes(url);
   const res = await fetch(url, withProgress ? { ...options, headers: { ...options.headers, Accept: 'application/x-ndjson' } } : options);
@@ -45,6 +47,7 @@ const post = (url, value) => api(url, { method: 'POST', headers: { 'Content-Type
 function status(message, error = false) {
   $('status').textContent = message; $('status').className = error ? 'error' : '';
   if (busy) { $('processingDetail').textContent = message; if (error) processingFailed = true; }
+  else $('processing').hidden = true;
 }
 function elapsed() {
   const seconds = Math.floor((Date.now() - processingStarted) / 1000);
@@ -81,8 +84,12 @@ $('audioTab').onclick = () => tab(true);
 $('textTab').onclick = () => { tab(false); $('transcript').focus(); };
 function selectFile(file) {
   if (busy || !file) return;
-  if (!/\.(mp3|mp4|mpeg|mpga|m4a|wav|webm)$/i.test(file.name)) { status('지원하지 않는 파일 형식입니다.', true); return; }
-  if (file.size > 25_000_000 || file.size === 0) { status('0바이트 초과, 25 MB 이하의 파일을 선택해 주세요.', true); return; }
+  let error = '';
+  if (!/\.(mp3|mp4|mpeg|mpga|m4a|wav|webm)$/i.test(file.name)) error = '지원하지 않는 파일 형식입니다. MP3, M4A, WAV, WEBM 등의 음성 파일을 선택해 주세요.';
+  else if (file.size === 0) error = '선택한 파일이 비어 있습니다(0바이트). 녹음이 저장된 다른 파일을 선택해 주세요.';
+  else if (file.size > maxAudioBytes()) error = `파일 크기는 ${(file.size / 1_000_000).toFixed(1)} MB입니다. ${provider() === 'local' ? '오프라인' : '클라우드'}에서는 최대 ${maxAudioBytes() / 1_000_000} MB까지 처리할 수 있습니다.${provider() === 'cloud' && !config?.hosted ? ' 오프라인 AI로 바꾸면 최대 200 MB까지 처리할 수 있습니다.' : ' 파일을 나누거나 압축해 주세요.'}`;
+  $('uploadError').hidden = !error; $('uploadError').textContent = error;
+  if (error) { selectedFile = null; $('audio').value = ''; $('fileLabel').textContent = `${file.name} · 선택할 수 없는 파일`; status(error, true); return; }
   selectedFile = file; $('fileLabel').textContent = `${file.name} · ${(file.size / 1_000_000).toFixed(1)} MB`;
   status('파일을 선택했습니다. 음성을 텍스트로 변환해 주세요.');
 }
@@ -118,8 +125,10 @@ $('recommendTitle').onclick = () => run('회의 내용에 어울리는 제목을
   const { recommendedTitle: title } = await post('/api/recommend-title', { transcript: $('transcript').value.trim(), provider: provider() });
   offerTitle(title); status(titleEdited ? '추천 제목을 확인하고 눌러서 적용해 주세요.' : '회의 제목을 추천했습니다.');
 });
-$('transcribe').onclick = () => run('음성을 텍스트로 변환하고 있습니다. 파일 길이에 따라 몇 분 걸릴 수 있습니다.', async () => {
-  if (!selectedFile) throw new Error('먼저 음성 파일을 선택해 주세요.');
+$('transcribe').onclick = () => {
+  if (busy) return;
+  if (!selectedFile) { status('음성 파일을 먼저 선택하면 변환을 시작할 수 있습니다.'); $('audio').click(); return; }
+  return run('음성을 텍스트로 변환하고 있습니다. 파일 길이에 따라 몇 분 걸릴 수 있습니다.', async () => {
   if ($('transcript').value.trim() && !confirm('현재 원문을 새 변환 결과로 바꿀까요?')) { status('변환을 취소했습니다.'); return; }
   const form = new FormData(); form.append('audio', selectedFile); form.append('language', $('language').value); form.append('provider', provider());
   const result = await api('/api/transcribe', { method: 'POST', body: form });
@@ -130,7 +139,8 @@ $('transcribe').onclick = () => run('음성을 텍스트로 변환하고 있습�
     const { recommendedTitle: title } = await post('/api/recommend-title', { transcript: result.transcript, provider: provider() }); offerTitle(title);
     status('변환과 제목 추천 완료. 원문을 확인하고 회의록을 정리해 주세요.');
   } catch (e) { status(`음성 변환은 완료했습니다. 제목 추천: ${e.message} 원문은 유지됩니다.`, true); }
-});
+  });
+};
 $('summarize').onclick = () => run('핵심 내용, 결정 사항, 할 일을 정리하고 있습니다.', async () => {
   const title = $('title').value.trim();
   const transcript = $('transcript').value.trim();
@@ -172,6 +182,7 @@ $('newMeeting').onclick = () => {
   $('title').value = ''; $('transcript').value = ''; $('audio').value = ''; selectedFile = null;
   titleEdited = false; clearRecommendation();
   $('fileLabel').textContent = '회의 음성을 여기에 놓아주세요'; updateChars(); invalidate(); tab(true); status('');
+  $('uploadError').hidden = true; $('uploadError').textContent = '';
   $('processing').hidden = true;
 };
 async function history() {
