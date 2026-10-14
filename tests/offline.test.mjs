@@ -115,7 +115,20 @@ test('local model calls loopback with JSON schema and never accepts a remote end
     called = { url, body: JSON.parse(options.body) }; return Response.json({ done: true, done_reason: 'stop', response: '{"recommendedTitle":"회의 제목"}' });
   } });
   const schema = { type: 'object' }; const result = await ai.generate({ instructions: '회의 제목 생성', input: '회의 내용', schema });
-  assert.equal(result.recommendedTitle, '회의 제목'); assert.equal(called.url, 'http://127.0.0.1:11434/api/generate'); assert.deepEqual(called.body.format, schema); assert.equal(called.body.stream, false);
+  assert.equal(result.recommendedTitle, '회의 제목'); assert.equal(called.url, 'http://127.0.0.1:11434/api/generate'); assert.deepEqual(called.body.format, schema); assert.equal(called.body.stream, true); assert.equal(called.body.options.num_predict, 256);
   const remote = createLocalAI({ env: { OLLAMA_URL: 'https://cloud.example' }, fetchImpl: () => { throw new Error('Do not call network'); } });
   await assert.rejects(remote.generate({ instructions: '', input: '', schema }), /localhost/);
+});
+
+test('local JSON streaming stops at a complete result and releases the model instead of waiting for trailing whitespace', async () => {
+  let cancelled = 0; const stages = [];
+  const ai = createLocalAI({ fetchImpl: async () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ response: '{"recommendedTitle":', done: false }) + '\n' + JSON.stringify({ response: '"회의 제목"}', done: false }) + '\n'));
+    }, cancel() { cancelled++; }
+  }), { headers: { 'Content-Type': 'application/x-ndjson' } }) });
+  const result = await ai.generate({ instructions: '제목 생성', input: '회의 내용', schema: { type: 'object' }, onProgress: message => stages.push(message) });
+  assert.equal(result.recommendedTitle, '회의 제목'); assert.equal(cancelled, 1); assert.deepEqual(stages, ['회의 제목을 작성하고 있습니다.']);
+  // A second call must work: the exclusive job cannot remain busy after cancelling the stream.
+  assert.equal((await ai.generate({ instructions: '', input: '', schema: {} })).recommendedTitle, '회의 제목');
 });

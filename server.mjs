@@ -90,6 +90,8 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
     catch (e) { if (e.code === 'ENOENT') throw new AppError(404, '회의록을 찾을 수 없습니다.'); throw e; }
   }
   return http.createServer(async (req, res) => {
+    const jobAbort = new AbortController();
+    res.on('close', () => { if (!res.writableFinished) jobAbort.abort(); });
     const progress = message => {
       if (req.headers.accept !== 'application/x-ndjson' || res.destroyed) return;
       if (!res.headersSent) res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
@@ -178,7 +180,7 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
           text: { format: { type: 'json_schema', name: titleOnly ? 'meeting_title' : 'meeting_summary', strict: true, schema: titleOnly ? titleSchema : meetingSchema } } };
         let generated;
         progress(titleOnly ? '회의 내용에 어울리는 제목을 추천하고 있습니다.' : '핵심 내용, 결정 사항, 담당자와 할 일을 정리하고 있습니다.');
-        if (chosenProvider === 'local') generated = await localAI.generate({ instructions: requestData.instructions, input: requestData.input, schema: requestData.text.format.schema });
+        if (chosenProvider === 'local') generated = await localAI.generate({ instructions: requestData.instructions, input: requestData.input, schema: requestData.text.format.schema, onProgress: progress, signal: jobAbort.signal });
         else {
           const result = await upstream('responses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestData) });
           assert(result.status === 'completed', '요약이 완료되지 않았습니다. 원문을 줄이거나 다시 시도해 주세요.', 502);

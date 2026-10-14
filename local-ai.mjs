@@ -52,15 +52,39 @@ export function createLocalAI({ fetchImpl = fetch, env = process.env } = {}) {
         finally { await rm(temp, { recursive: true, force: true }); }
       });
     },
-    async generate({ instructions, input, schema }) {
+    async generate({ instructions, input, schema, onProgress = () => {}, signal }) {
       return exclusive(async () => {
         let res;
+        const titleOnly = !schema.properties?.summary;
+        const taskInstructions = titleOnly ? ' recommendedTitle 하나만 반환하세요. 60자 이내의 짧고 구체적인 회의 제목을 쓰고 설명은 덧붙이지 마세요.' : ' actions의 task에는 할 일만, owner에는 명시된 담당자 이름만, due에는 명시된 기한만 각각 넣으세요. 명시된 이름이나 기한을 미정으로 바꾸지 마세요. 예: "영희가 월요일까지 보고서를 공유한다"이면 task="보고서 공유", owner="영희", due="월요일"입니다. 이 예시를 결과에 포함하지 마세요.';
         try {
-          res = await fetchImpl(`${ollamaURL()}/api/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(900_000),
-            body: JSON.stringify({ model: env.OLLAMA_MODEL || 'qwen2.5:3b', system: instructions + ' 모든 문자열은 한국어로 작성하고 지정한 JSON 형식으로만 출력하세요. actions의 task에는 할 일만, owner에는 명시된 담당자 이름만, due에는 명시된 기한만 각각 넣으세요. 명시된 이름이나 기한을 미정으로 바꾸지 마세요. 예: "영희가 월요일까지 보고서를 공유한다"이면 task="보고서 공유", owner="영희", due="월요일"입니다. 이 예시를 결과에 포함하지 마세요.', prompt: input, format: schema, stream: false, keep_alive: '5m', options: { temperature: 0.1, num_ctx: 16384, num_predict: 3500 } }) });
+          res = await fetchImpl(`${ollamaURL()}/api/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.any([AbortSignal.timeout(900_000), ...(signal ? [signal] : [])]),
+            body: JSON.stringify({ model: env.OLLAMA_MODEL || 'qwen2.5:3b', system: instructions + ' 모든 문자열은 한국어로 작성하고 지정한 JSON 형식으로만 출력하세요.' + taskInstructions, prompt: input, format: schema, stream: true, keep_alive: '5m', options: { temperature: 0.1, num_ctx: 16384, num_predict: titleOnly ? 256 : 3500 } }) });
         } catch (e) { if (e.status) throw e; fail(503, '로컬 요약 서버에 연결할 수 없습니다. scripts/start-offline.ps1을 실행해 주세요.'); }
         if (res.status === 404) fail(503, '로컬 요약 모델이 없습니다. 오프라인 초기 설치를 완료해 주세요.');
         if (!res.ok) fail(502, '로컬 요약 모델 실행에 실패했습니다.');
+        if (res.headers?.get('content-type')?.includes('application/x-ndjson')) {
+          const reader = res.body.getReader(), decoder = new TextDecoder(); let pending = '', output = '', announced = false;
+          try {
+            while (true) {
+              const { value, done } = await reader.read(); pending += decoder.decode(value, { stream: !done });
+              const lines = pending.split('\n'); pending = lines.pop(); if (done && pending.trim()) { lines.push(pending); pending = ''; }
+              for (const line of lines) {
+                if (!line.trim()) continue;
+                const event = JSON.parse(line); if (event.error) fail(502, '로컬 요약 모델 실행에 실패했습니다.');
+                output += event.response || '';
+                if (output.trim() && !announced) { announced = true; onProgress(titleOnly ? '회의 제목을 작성하고 있습니다.' : '핵심 요약과 결정 사항, 할 일을 작성하고 있습니다.'); }
+                // Some local models continue producing whitespace after a complete JSON object.
+                let generated; try { generated = JSON.parse(output); } catch {}
+                if (generated && typeof generated === 'object' && !Array.isArray(generated)) return generated;
+                if (event.done) fail(502, '로컬 요약이 완료되지 않았습니다. 원문을 줄여 다시 시도해 주세요.');
+              }
+              if (done) break;
+            }
+            fail(502, '로컬 모델의 응답이 끊겼습니다. 다시 시도해 주세요.');
+          } catch (e) { if (e.status) throw e; fail(502, '로컬 모델의 결과를 읽지 못했습니다. 다시 시도해 주세요.'); }
+          finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+        }
         const data = await res.json();
         if (!data.done || data.done_reason === 'length') fail(502, '로컬 요약이 완료되지 않았습니다. 원문을 줄여 다시 시도해 주세요.');
         try { return JSON.parse(data.response); } catch { fail(502, '로컬 모델의 결과 형식이 올바르지 않습니다. 다시 시도해 주세요.'); }
