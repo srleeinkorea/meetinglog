@@ -71,3 +71,12 @@ test('upstream errors and incomplete or invalid summaries are surfaced', async t
     assert.equal(response.status, 502); assert.ok((await response.json()).error.includes(expected));
   }
 });
+test('exhausted credits are actionable for audio, title and summary without leaking provider messages', async t => {
+  const { request } = await fixture(t, { apiKey: 'fake', fetchImpl: async () => Response.json({ error: { code: 'credit_balance_exhausted', type: 'insufficient_quota', message: 'private-provider-detail-do-not-expose' } }, { status: 429 }) });
+  for (const route of ['/api/summarize', '/api/recommend-title']) {
+    const response = await request(route, json({ title: '', transcript: '음성 업로드 기능을 구현하기로 결정했습니다.' }));
+    assert.equal(response.status, 402); const data = await response.json(); assert.ok(data.error.includes('크레딧')); assert.ok(!data.error.includes('private-provider-detail'));
+  }
+  const form = new FormData(); form.append('audio', new File(['audio'], 'meeting.mp3')); form.append('language', 'ko');
+  const response = await request('/api/transcribe', { method: 'POST', body: form }); assert.equal(response.status, 402); assert.ok((await response.json()).error.includes('크레딧'));
+});

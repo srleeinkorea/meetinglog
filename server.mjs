@@ -66,6 +66,12 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
     try { response = await fetchImpl(`https://api.openai.com/v1/${endpoint}`, { ...options, headers: { ...options.headers, Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(180_000) }); }
     catch { throw new AppError(504, 'API 연결이 지연되거나 실패했습니다. 잠시 후 다시 시도해 주세요.'); }
     if (!response.ok) {
+      if (response.status === 429) {
+        let apiError; try { apiError = (await response.json()).error; } catch {}
+        if (apiError?.type === 'insufficient_quota' || ['insufficient_quota', 'credit_balance_exhausted'].includes(apiError?.code)) {
+          throw new AppError(402, 'OpenAI API 크레딧 잔액이 부족합니다. 결제·크레딧을 설정한 뒤 다시 시도해 주세요.');
+        }
+      }
       const messages = { 401: 'API 키를 확인해 주세요.', 403: '이 API 또는 모델에 대한 접근 권한이 없습니다.', 429: 'API 사용 한도 또는 요청 제한에 도달했습니다.', 400: 'API가 입력을 처리하지 못했습니다. 파일 형식 또는 모델 설정을 확인해 주세요.' };
       throw new AppError(502, messages[response.status] || '외부 API 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.');
     }
