@@ -158,7 +158,11 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
         assert(file.size <= maxAudio, `${chosenProvider === 'local' ? '오프라인' : '클라우드'} 음성 파일은 최대 ${maxAudio / 1_000_000} MB까지 업로드할 수 있습니다.`, 413);
         assert(/\.(mp3|mp4|mpeg|mpga|m4a|wav|webm)$/i.test(file.name), '지원하지 않는 파일 형식입니다.');
         const language = form.get('language');
-        if (chosenProvider === 'local') return reply(res, 200, { transcript: await localAI.transcribe(file, language, progress) });
+        if (chosenProvider === 'local') {
+          const mode = form.get('sttMode') || undefined;
+          assert(!mode || ['fast', 'turbo', 'accurate'].includes(mode), '올바른 음성 변환 속도를 선택해 주세요.');
+          return reply(res, 200, { transcript: await localAI.transcribe(file, language, progress, { mode, signal: jobAbort.signal }) });
+        }
         progress('클라우드 AI가 음성을 텍스트로 변환하고 있습니다.');
         const payload = new FormData(); payload.append('file', file); payload.append('model', process.env.STT_MODEL || 'gpt-4o-transcribe'); payload.append('response_format', 'json');
         if (language === 'ko' || language === 'en') payload.append('language', language);

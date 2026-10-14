@@ -11,7 +11,14 @@ function providerStatus() {
   $('apiStatus').textContent = local ? '오프라인 AI' : '클라우드 AI';
   $('transcript').maxLength = local ? 12000 : 80000;
   $('uploadLimit').textContent = `MP3, M4A, WAV, WEBM 등 · 최대 ${maxAudioBytes() / 1_000_000} MB`;
+  $('sttSettings').hidden = !local;
+  const modes = config?.local?.sttModes || ['accurate'];
+  for (const option of $('sttMode').options) option.disabled = !modes.includes(option.value);
+  if (!modes.includes($('sttMode').value)) $('sttMode').value = config?.local?.defaultSttMode || modes[0] || 'accurate';
+  sttHint();
 }
+function sttHint() { $('sttHint').textContent = { fast: '빠른 모델로 변환합니다. 이름과 전문 용어는 원문에서 확인해 주세요.', turbo: '속도를 가장 우선합니다. 인식 오류가 늘어날 수 있어 초안 작성에 적합합니다.', accurate: '기존 큰 모델로 변환합니다. 이름과 전문 용어에 유리하지만 시간이 더 걸립니다.' }[$('sttMode').value]; }
+$('sttMode').onchange = sttHint;
 $('provider').onchange = () => { providerStatus(); status(provider() === 'local' ? '오프라인 모드입니다. 모델 최초 설치 후 인터넷 없이 사용할 수 있습니다.' : '클라우드 모드입니다. 인터넷 연결과 API 키가 필요합니다.'); if (selectedFile) selectFile(selectedFile); };
 async function api(url, options = {}) {
   const withProgress = busy && ['/api/transcribe', '/api/recommend-title', '/api/summarize'].includes(url);
@@ -56,7 +63,7 @@ function elapsed() {
 }
 function setBusy(value) {
   busy = value;
-  for (const id of ['transcribe', 'summarize', 'save', 'demo', 'newMeeting', 'title', 'transcript', 'audio', 'language', 'audioTab', 'textTab', 'recommendTitle', 'applyTitle', 'provider', 'logout']) $(id).disabled = value;
+  for (const id of ['transcribe', 'summarize', 'save', 'demo', 'newMeeting', 'title', 'transcript', 'audio', 'language', 'sttMode', 'audioTab', 'textTab', 'recommendTitle', 'applyTitle', 'provider', 'logout']) $(id).disabled = value;
   document.querySelectorAll('.history button').forEach(b => b.disabled = value);
 }
 async function run(message, fn) {
@@ -130,10 +137,14 @@ $('transcribe').onclick = () => {
   if (!selectedFile) { status('음성 파일을 먼저 선택하면 변환을 시작할 수 있습니다.'); $('audio').click(); return; }
   return run('음성을 텍스트로 변환하고 있습니다. 파일 길이에 따라 몇 분 걸릴 수 있습니다.', async () => {
   if ($('transcript').value.trim() && !confirm('현재 원문을 새 변환 결과로 바꿀까요?')) { status('변환을 취소했습니다.'); return; }
-  const form = new FormData(); form.append('audio', selectedFile); form.append('language', $('language').value); form.append('provider', provider());
+  const form = new FormData(); form.append('audio', selectedFile); form.append('language', $('language').value); form.append('provider', provider()); form.append('sttMode', $('sttMode').value);
   const result = await api('/api/transcribe', { method: 'POST', body: form });
   $('transcript').value = result.transcript; updateChars(); invalidate(); clearRecommendation();
   tab(false);
+  if (provider() === 'local') {
+    status('음성 변환 완료. 원문을 바로 수정할 수 있습니다. 회의록 정리하기를 누르면 제목 추천과 요약을 함께 진행합니다.');
+    return;
+  }
   status('변환 완료. 회의 제목을 추천하고 있습니다.');
   try {
     const { recommendedTitle: title } = await post('/api/recommend-title', { transcript: result.transcript, provider: provider() }); offerTitle(title);

@@ -4,11 +4,12 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
 // Exercise browser event handlers without a browser or a paid API request.
-async function ui({ requireLogin = false, aiResponse } = {}) {
+async function ui({ requireLogin = false, aiResponse, serverConfig = {} } = {}) {
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
   const script = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   class Element {
     value = ''; textContent = ''; children = []; hidden = false;
+    options = [{ value: 'fast' }, { value: 'turbo' }, { value: 'accurate' }];
     classList = { toggle() {}, add() {}, remove() {} };
     append(...nodes) { this.children.push(...nodes); }
     replaceChildren(...nodes) { this.children = nodes; }
@@ -28,7 +29,7 @@ async function ui({ requireLogin = false, aiResponse } = {}) {
       if (url === '/api/logout') { loggedIn = false; return { ok: true, status: 200, json: async () => ({ authenticated: false }) }; }
       if (!loggedIn) return { ok: false, status: 401, json: async () => ({ error: '로그인이 필요합니다.' }) };
       if (aiResponse && ['/api/summarize', '/api/transcribe', '/api/recommend-title'].includes(url)) return aiResponse(url, options);
-      if (url === '/api/config') data = { configured: true, requiresAuth: requireLogin };
+      if (url === '/api/config') data = { configured: true, requiresAuth: requireLogin, ...serverConfig };
       else if (url === '/api/meetings' && options?.method === 'POST') { const m = JSON.parse(options.body); saved.push(m); data = { ...m, id: 'saved-id' }; }
       else if (url === '/api/meetings') data = [];
       else data = { recommendedTitle: 'MVP 기능 범위 및 역할 분담 회의', summary };
@@ -101,4 +102,18 @@ test('offline accepts a 100 MB recording, shows exact rejection reasons, and nev
   $('audio').onchange({ target: { files: [{ name: 'empty.wav', size: 0 }] } }); assert.match($('uploadError').textContent, /0바이트/);
   $('provider').value = 'local'; $('provider').onchange();
   $('audio').onchange({ target: { files: [{ name: 'huge.wav', size: 200_000_001 }] } }); assert.match($('uploadError').textContent, /최대 200 MB/);
+});
+
+test('local STT unlocks editing immediately and recommends the title with summary instead of blocking on a second AI call', async () => {
+  const calls = [];
+  const { $ } = await ui({ serverConfig: { defaultProvider: 'local', local: { sttModes: ['fast', 'turbo', 'accurate'], defaultSttMode: 'fast' } }, aiResponse: (url, options) => {
+    calls.push(url);
+    if (url === '/api/transcribe') { assert.equal(options.body.get('sttMode'), 'fast'); return Response.json({ transcript: '서비스 출시 일정과 역할 분담을 정했습니다.' }); }
+    return Response.json({ recommendedTitle: '서비스 출시 일정 회의', summary: { overview: '요약', topics: [], decisions: [], actions: [], questions: [] } });
+  } });
+  $('audio').onchange({ target: { files: [new File(['audio'], 'test.wav')] } });
+  await $('transcribe').onclick();
+  assert.deepEqual(calls, ['/api/transcribe']); assert.equal($('transcript').disabled, false); assert.equal($('summarize').disabled, false);
+  assert.equal($('title').value, ''); assert.match($('status').textContent, /음성 변환 완료/);
+  await $('summarize').onclick(); assert.equal($('title').value, '서비스 출시 일정 회의'); assert.equal($('result').hidden, false);
 });

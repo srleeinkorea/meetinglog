@@ -6,14 +6,16 @@ import path from 'node:path';
 
 const execute = promisify(execFile);
 function fail(status, message) { const error = new Error(message); error.status = status; throw error; }
-export function createLocalAI({ fetchImpl = fetch, env = process.env } = {}) {
+export function createLocalAI({ fetchImpl = fetch, env = process.env, executeImpl = execute } = {}) {
+  const modelFor = mode => ({ fast: env.WHISPER_FAST_MODEL, turbo: env.WHISPER_TURBO_MODEL, accurate: env.WHISPER_MODEL })[mode];
+  const defaultMode = () => env.LOCAL_STT_MODE || (env.WHISPER_FAST_MODEL ? 'fast' : 'accurate');
   let running = false;
   async function exclusive(fn) {
     if (running) fail(409, '로컬 AI가 다른 요청을 처리 중입니다. 완료 후 다시 시도해 주세요.');
     running = true; try { return await fn(); } finally { running = false; }
   }
-  async function available() {
-    try { await Promise.all(['WHISPER_BIN', 'WHISPER_MODEL', 'FFMPEG_BIN'].map(key => access(env[key] || ''))); return true; } catch { return false; }
+  async function available(mode = defaultMode()) {
+    try { await Promise.all([env.WHISPER_BIN, modelFor(mode), env.FFMPEG_BIN].map(file => access(file || ''))); return true; } catch { return false; }
   }
   function ollamaURL() {
     const url = new URL(env.OLLAMA_URL || 'http://127.0.0.1:11434');
@@ -27,13 +29,16 @@ export function createLocalAI({ fetchImpl = fetch, env = process.env } = {}) {
         const res = await fetchImpl(`${ollamaURL()}/api/tags`, { signal: AbortSignal.timeout(2000) });
         const tags = await res.json(); summaryReady = Boolean(res.ok && tags.models?.some(m => m.name === (env.OLLAMA_MODEL || 'qwen2.5:3b')));
       } catch {}
-      return { sttReady: await available(), summaryReady };
+      const sttModes = (await Promise.all(['fast', 'turbo', 'accurate'].map(async mode => await available(mode) ? mode : null))).filter(Boolean);
+      return { sttReady: sttModes.length > 0, summaryReady, sttModes, defaultSttMode: sttModes.includes(defaultMode()) ? defaultMode() : sttModes[0] };
     },
-    async transcribe(file, language, onProgress = () => {}) {
+    async transcribe(file, language, onProgress = () => {}, { mode = defaultMode(), signal } = {}) {
       return exclusive(async () => {
-        if (!await available()) fail(503, '오프라인 STT가 준비되지 않았습니다. scripts/setup-offline.ps1을 먼저 실행해 주세요.');
+        if (!['fast', 'turbo', 'accurate'].includes(mode)) fail(400, '올바른 음성 변환 속도를 선택해 주세요.');
+        if (!await available(mode)) fail(503, '선택한 음성 모델이 준비되지 않았습니다. 다른 속도를 선택하거나 오프라인 설치를 완료해 주세요.');
+        const model = modelFor(mode);
         // whisper.cpp Windows binaries can fail on a Unicode user-profile temp path.
-        const tempRoot = env.LOCAL_TEMP_DIR || path.join(path.dirname(env.WHISPER_MODEL), 'tmp');
+        const tempRoot = env.LOCAL_TEMP_DIR || path.join(path.dirname(model), 'tmp');
         await mkdir(tempRoot, { recursive: true });
         const temp = await mkdtemp(path.join(tempRoot, 'meetinglog-audio-'));
         try {
@@ -42,9 +47,12 @@ export function createLocalAI({ fetchImpl = fetch, env = process.env } = {}) {
           const source = path.join(temp, 'source' + path.extname(file.name).toLowerCase());
           onProgress('음성 파일을 변환하기 좋은 형식으로 준비하고 있습니다.');
           await writeFile(source, Buffer.from(await file.arrayBuffer()));
-          await execute(env.FFMPEG_BIN, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-i', source, '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav], { windowsHide: true, timeout: 180_000, maxBuffer: 1_000_000 });
-          onProgress('이 PC의 음성 모델이 대화를 텍스트로 변환하고 있습니다.');
-          await execute(env.WHISPER_BIN, ['-m', env.WHISPER_MODEL, '-f', wav, '-l', ['ko', 'en'].includes(language) ? language : 'auto', '-t', String(Math.min(os.availableParallelism(), 8)), '-otxt', '-of', output, '-np'], { windowsHide: true, timeout: 1_800_000, maxBuffer: 2_000_000 });
+          await executeImpl(env.FFMPEG_BIN, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-i', source, '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav], { windowsHide: true, signal, timeout: 180_000, maxBuffer: 1_000_000 });
+          onProgress(`${{ fast: '빠른', turbo: '초고속', accurate: '정확도 우선' }[mode]} 모델로 대화를 텍스트로 변환하고 있습니다.`);
+          const threads = Math.max(1, Math.min(os.availableParallelism(), Number(env.WHISPER_THREADS) || 8));
+          const args = ['-m', model, '-f', wav, '-l', ['ko', 'en'].includes(language) ? language : 'auto', '-t', String(Math.floor(threads)), '-bs', mode === 'accurate' ? '5' : '1', '-bo', mode === 'accurate' ? '5' : '1', '-otxt', '-of', output, '-np'];
+          if (mode !== 'accurate') args.push('-nf');
+          await executeImpl(env.WHISPER_BIN, args, { windowsHide: true, signal, timeout: 1_800_000, maxBuffer: 2_000_000 });
           const transcript = (await readFile(`${output}.txt`, 'utf8')).trim();
           if (!transcript) fail(502, '음성을 인식하지 못했습니다. 파일을 확인해 주세요.');
           return transcript;

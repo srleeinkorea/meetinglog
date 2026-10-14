@@ -65,6 +65,10 @@ if (-not $ffmpegExe) {
 }
 $whisperModel = Join-Path $runtimeRoot 'ggml-small.bin'
 Get-Download 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin' $whisperModel
+$fastModel = Join-Path $runtimeRoot 'ggml-base-q5_1.bin'
+$turboModel = Join-Path $runtimeRoot 'ggml-tiny-q5_1.bin'
+Get-Download 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin' $fastModel
+Get-Download 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin' $turboModel
 $whisperExe = Get-ChildItem -LiteralPath $whisperRoot -Filter 'whisper-cli.exe' -Recurse | Select-Object -First 1
 $ffmpegExe = Get-ChildItem -LiteralPath $ffmpegRoot -Filter 'ffmpeg.exe' -Recurse | Select-Object -First 1
 if (-not $whisperExe -or -not $ffmpegExe) { throw 'Offline executable not found after extraction.' }
@@ -74,7 +78,7 @@ $installedModels = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -Tim
 if (-not @($installedModels.models | Where-Object { $_.name -eq $SummaryModel }).Count) { throw 'Ollama model download failed. See runtime/model-pull.stderr.log.' }
 $envFile = Join-Path $projectRoot '.env'
 $existing = if (Test-Path -LiteralPath $envFile) { [IO.File]::ReadAllLines($envFile) } else { @() }
-$updates = [ordered]@{AI_PROVIDER='local'; WHISPER_BIN=$whisperExe.FullName.Replace('\','/'); WHISPER_MODEL=$whisperModel.Replace('\','/'); FFMPEG_BIN=$ffmpegExe.FullName.Replace('\','/'); OLLAMA_URL='http://127.0.0.1:11434'; OLLAMA_MODEL=$SummaryModel}
+$updates = [ordered]@{AI_PROVIDER='local'; WHISPER_BIN=$whisperExe.FullName.Replace('\','/'); WHISPER_MODEL=$whisperModel.Replace('\','/'); WHISPER_FAST_MODEL=$fastModel.Replace('\','/'); WHISPER_TURBO_MODEL=$turboModel.Replace('\','/'); LOCAL_STT_MODE='fast'; WHISPER_THREADS='8'; FFMPEG_BIN=$ffmpegExe.FullName.Replace('\','/'); OLLAMA_URL='http://127.0.0.1:11434'; OLLAMA_MODEL=$SummaryModel}
 $retained = @($existing | Where-Object { $lineKey = ($_ -split '=',2)[0]; -not $updates.Contains($lineKey) })
 $outputLines = $retained + @($updates.GetEnumerator() | ForEach-Object { $_.Key + '=' + $_.Value })
 [IO.File]::WriteAllLines($envFile, $outputLines, [Text.UTF8Encoding]::new($false))
