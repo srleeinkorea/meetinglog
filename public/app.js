@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
 let current = null, selectedFile = null, busy = false, titleEdited = false, recommendedTitle = '';
 let config = null;
+let processingTimer = null, processingStarted = 0, processingFailed = false;
 const provider = () => $('provider').value || 'cloud';
 function providerStatus() {
   const local = provider() === 'local';
@@ -11,7 +12,29 @@ function providerStatus() {
 }
 $('provider').onchange = () => { providerStatus(); status(provider() === 'local' ? '오프라인 모드입니다. 모델 최초 설치 후 인터넷 없이 사용할 수 있습니다.' : '클라우드 모드입니다. 인터넷 연결과 API 키가 필요합니다.'); };
 async function api(url, options = {}) {
-  const res = await fetch(url, options); const data = await res.json();
+  const withProgress = busy && ['/api/transcribe', '/api/recommend-title', '/api/summarize'].includes(url);
+  const res = await fetch(url, withProgress ? { ...options, headers: { ...options.headers, Accept: 'application/x-ndjson' } } : options);
+  if (res.ok && res.headers?.get('content-type')?.includes('application/x-ndjson')) {
+    const reader = res.body.getReader(), decoder = new TextDecoder(); let pending = '', result, received = false;
+    const event = line => {
+      if (!line.trim()) return;
+      const value = JSON.parse(line);
+      if (value.type === 'progress') status(value.message);
+      if (value.type === 'result') { result = value.data; received = true; }
+      if (value.type === 'error') { const error = new Error(value.error); error.status = value.status; throw error; }
+    };
+    try {
+      while (true) {
+        const { value, done } = await reader.read(); pending += decoder.decode(value, { stream: !done });
+        let boundary; while ((boundary = pending.indexOf('\n')) >= 0) { event(pending.slice(0, boundary)); pending = pending.slice(boundary + 1); }
+        if (done) break;
+      }
+      event(pending);
+      if (!received) throw new Error('처리 연결이 끊겼습니다. 다시 시도해 주세요.');
+      return result;
+    } finally { reader.releaseLock(); }
+  }
+  const data = await res.json();
   if (!res.ok) {
     if (res.status === 401 && url !== '/api/login') showLogin();
     const error = new Error(data.error || '요청에 실패했습니다.'); error.status = res.status; throw error;
@@ -19,7 +42,15 @@ async function api(url, options = {}) {
   return data;
 }
 const post = (url, value) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
-function status(message, error = false) { $('status').textContent = message; $('status').className = error ? 'error' : ''; }
+function status(message, error = false) {
+  $('status').textContent = message; $('status').className = error ? 'error' : '';
+  if (busy) { $('processingDetail').textContent = message; if (error) processingFailed = true; }
+}
+function elapsed() {
+  const seconds = Math.floor((Date.now() - processingStarted) / 1000);
+  $('processingTime').textContent = seconds >= 60 ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초 경과` : `${seconds}초 경과`;
+  if (seconds >= 30) $('processingHint').textContent = provider() === 'local' ? '이 PC에서 처리 중입니다. 첫 실행이나 긴 녹음은 몇 분 걸릴 수 있습니다. 이 창을 열어 두세요.' : 'AI 응답을 기다리고 있습니다. 긴 녹음은 몇 분 걸릴 수 있습니다. 이 창을 열어 두세요.';
+}
 function setBusy(value) {
   busy = value;
   for (const id of ['transcribe', 'summarize', 'save', 'demo', 'newMeeting', 'title', 'transcript', 'audio', 'language', 'audioTab', 'textTab', 'recommendTitle', 'applyTitle', 'provider', 'logout']) $(id).disabled = value;
@@ -27,8 +58,19 @@ function setBusy(value) {
 }
 async function run(message, fn) {
   if (busy) return;
-  setBusy(true); status(message);
-  try { await fn(); } catch (e) { status(e.message, true); } finally { setBusy(false); }
+  processingFailed = false; processingStarted = Date.now();
+  $('processing').hidden = false; $('processing').className = 'processing';
+  $('processingTitle').textContent = '회의를 처리하고 있습니다'; $('processingIcon').className = 'processing-spinner'; $('processingIcon').textContent = '';
+  $('processingTrack').hidden = false; $('processingHint').textContent = '이 창을 열어 두세요. 완료되면 결과가 자동으로 표시됩니다.';
+  setBusy(true); status(message); elapsed(); processingTimer = setInterval(elapsed, 1000);
+  try { await fn(); } catch (e) { status(e.message, true); } finally {
+    clearInterval(processingTimer); processingTimer = null; elapsed();
+    $('processing').className = processingFailed ? 'processing failed' : 'processing complete';
+    $('processingTitle').textContent = processingFailed ? '처리를 완료하지 못했습니다' : '처리가 끝났습니다';
+    $('processingIcon').className = 'processing-outcome'; $('processingIcon').textContent = processingFailed ? '!' : '✓';
+    $('processingTrack').hidden = true; $('processingHint').textContent = processingFailed ? '아래 안내를 확인하고 다시 시도해 주세요.' : '결과를 확인하고 다음 단계로 진행해 주세요.';
+    setBusy(false);
+  }
 }
 function tab(audio) {
   $('audioPanel').hidden = !audio;
@@ -82,6 +124,7 @@ $('transcribe').onclick = () => run('음성을 텍스트로 변환하고 있습�
   const form = new FormData(); form.append('audio', selectedFile); form.append('language', $('language').value); form.append('provider', provider());
   const result = await api('/api/transcribe', { method: 'POST', body: form });
   $('transcript').value = result.transcript; updateChars(); invalidate(); clearRecommendation();
+  tab(false);
   status('변환 완료. 회의 제목을 추천하고 있습니다.');
   try {
     const { recommendedTitle: title } = await post('/api/recommend-title', { transcript: result.transcript, provider: provider() }); offerTitle(title);
@@ -129,6 +172,7 @@ $('newMeeting').onclick = () => {
   $('title').value = ''; $('transcript').value = ''; $('audio').value = ''; selectedFile = null;
   titleEdited = false; clearRecommendation();
   $('fileLabel').textContent = '회의 음성을 여기에 놓아주세요'; updateChars(); invalidate(); tab(true); status('');
+  $('processing').hidden = true;
 };
 async function history() {
   const meetings = await api('/api/meetings'); $('count').textContent = meetings.length;
@@ -190,6 +234,7 @@ $('logout').onclick = () => run('로그아웃하고 있습니다.', async () => 
   $('title').value = ''; $('transcript').value = ''; $('audio').value = ''; selectedFile = null;
   titleEdited = false; clearRecommendation(); updateChars(); invalidate(); $('history').replaceChildren(); $('count').textContent = '0';
   $('logout').hidden = true; showLogin(); status('');
+  $('processing').hidden = true;
 });
 async function initialize() {
   config = await api('/api/config'); $('provider').value = config.defaultProvider || 'cloud';

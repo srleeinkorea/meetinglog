@@ -33,7 +33,13 @@ async function body(req, limit) {
   return Buffer.concat(chunks);
 }
 async function jsonBody(req) { try { return JSON.parse((await body(req, 600_000)).toString()); } catch (e) { if (e.status) throw e; throw new AppError(400, '올바른 JSON 요청이 필요합니다.'); } }
-function reply(res, status, value) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); }
+function reply(res, status, value) {
+  if (res.headersSent) {
+    if (!res.destroyed) res.end(JSON.stringify(status >= 400 ? { type: 'error', status, error: value.error } : { type: 'result', data: value }) + '\n');
+    return;
+  }
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value));
+}
 
 export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'data'), apiKey = process.env.OPENAI_API_KEY, fetchImpl = fetch, localAI = createLocalAI(), appOrigin = process.env.APP_ORIGIN || process.env.RENDER_EXTERNAL_URL, password = process.env.APP_PASSWORD, now = Date.now } = {}) {
   const deploymentOrigin = appOrigin ? new URL(appOrigin).origin : null;
@@ -83,6 +89,11 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
     catch (e) { if (e.code === 'ENOENT') throw new AppError(404, '회의록을 찾을 수 없습니다.'); throw e; }
   }
   return http.createServer(async (req, res) => {
+    const progress = message => {
+      if (req.headers.accept !== 'application/x-ndjson' || res.destroyed) return;
+      if (!res.headersSent) res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+      res.write(JSON.stringify({ type: 'progress', message }) + '\n');
+    };
     try {
       if (req.url === '/healthz' && req.method === 'GET') return reply(res, 200, { status: 'ok' });
       const host = req.headers.host;
@@ -142,7 +153,8 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
         assert(file.size <= MAX_AUDIO, '음성 파일은 최대 25 MB까지 업로드할 수 있습니다.', 413);
         assert(/\.(mp3|mp4|mpeg|mpga|m4a|wav|webm)$/i.test(file.name), '지원하지 않는 파일 형식입니다.');
         const language = form.get('language');
-        if (provider(form.get('provider')) === 'local') return reply(res, 200, { transcript: await localAI.transcribe(file, language) });
+        if (provider(form.get('provider')) === 'local') return reply(res, 200, { transcript: await localAI.transcribe(file, language, progress) });
+        progress('클라우드 AI가 음성을 텍스트로 변환하고 있습니다.');
         const payload = new FormData(); payload.append('file', file); payload.append('model', process.env.STT_MODEL || 'gpt-4o-transcribe'); payload.append('response_format', 'json');
         if (language === 'ko' || language === 'en') payload.append('language', language);
         const result = await upstream('audio/transcriptions', { method: 'POST', body: payload });
@@ -162,6 +174,7 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
           input: JSON.stringify({ title: input.title, transcript: input.transcript }), max_output_tokens: 4000,
           text: { format: { type: 'json_schema', name: titleOnly ? 'meeting_title' : 'meeting_summary', strict: true, schema: titleOnly ? titleSchema : meetingSchema } } };
         let generated;
+        progress(titleOnly ? '회의 내용에 어울리는 제목을 추천하고 있습니다.' : '핵심 내용, 결정 사항, 담당자와 할 일을 정리하고 있습니다.');
         if (chosenProvider === 'local') generated = await localAI.generate({ instructions: requestData.instructions, input: requestData.input, schema: requestData.text.format.schema });
         else {
           const result = await upstream('responses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestData) });
@@ -200,7 +213,7 @@ export function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'd
         res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; form-action 'self'" }); return res.end(content);
       }
       reply(res, 404, { error: '요청한 경로를 찾을 수 없습니다.' });
-    } catch (e) { if (!res.headersSent) reply(res, e.status || 500, { error: e.status ? e.message : '서버 처리에 실패했습니다. 다시 시도해 주세요.' }); }
+    } catch (e) { reply(res, e.status || 500, { error: e.status ? e.message : '서버 처리에 실패했습니다. 다시 시도해 주세요.' }); }
   });
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

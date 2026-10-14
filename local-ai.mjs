@@ -29,7 +29,7 @@ export function createLocalAI({ fetchImpl = fetch, env = process.env } = {}) {
       } catch {}
       return { sttReady: await available(), summaryReady };
     },
-    async transcribe(file, language) {
+    async transcribe(file, language, onProgress = () => {}) {
       return exclusive(async () => {
         if (!await available()) fail(503, '오프라인 STT가 준비되지 않았습니다. scripts/setup-offline.ps1을 먼저 실행해 주세요.');
         // whisper.cpp Windows binaries can fail on a Unicode user-profile temp path.
@@ -40,8 +40,10 @@ export function createLocalAI({ fetchImpl = fetch, env = process.env } = {}) {
           const wav = path.join(temp, 'input.wav'); const output = path.join(temp, 'transcript');
           // Distinct names prevent ffmpeg from trying to overwrite a WAV input.
           const source = path.join(temp, 'source' + path.extname(file.name).toLowerCase());
+          onProgress('음성 파일을 변환하기 좋은 형식으로 준비하고 있습니다.');
           await writeFile(source, Buffer.from(await file.arrayBuffer()));
           await execute(env.FFMPEG_BIN, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-i', source, '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav], { windowsHide: true, timeout: 180_000, maxBuffer: 1_000_000 });
+          onProgress('이 PC의 음성 모델이 대화를 텍스트로 변환하고 있습니다.');
           await execute(env.WHISPER_BIN, ['-m', env.WHISPER_MODEL, '-f', wav, '-l', ['ko', 'en'].includes(language) ? language : 'auto', '-t', String(Math.min(os.availableParallelism(), 8)), '-otxt', '-of', output, '-np'], { windowsHide: true, timeout: 1_800_000, maxBuffer: 2_000_000 });
           const transcript = (await readFile(`${output}.txt`, 'utf8')).trim();
           if (!transcript) fail(502, '음성을 인식하지 못했습니다. 파일을 확인해 주세요.');

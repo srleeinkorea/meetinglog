@@ -31,6 +31,34 @@ test('local STT, title and summary do not require an API key or call cloud endpo
   response = await request('/api/recommend-title', json({ transcript, provider: 'local' })); assert.equal(response.status, 200); assert.equal(localCalls, 3);
   response = await request('/api/summarize', json({ transcript: '가'.repeat(12001), provider: 'local' })); assert.equal(response.status, 413); assert.equal(localCalls, 3);
 });
+
+test('streamed STT sends real stages before completion and finishes with a usable result', async t => {
+  let finish;
+  const gate = new Promise(resolve => { finish = resolve; });
+  const request = await app(t, { apiKey: '', localAI: {
+    transcribe: async (_file, _language, progress) => { progress('음성 준비 중'); await gate; progress('음성 변환 중'); return '회의를 변환했습니다.'; }
+  } });
+  t.after(() => finish());
+  const form = new FormData(); form.append('audio', new File(['test'], 'meeting.wav')); form.append('provider', 'local');
+  const response = await request('/api/transcribe', { method: 'POST', headers: { Accept: 'application/x-ndjson' }, body: form });
+  assert.match(response.headers.get('content-type'), /application\/x-ndjson/);
+  const reader = response.body.getReader();
+  const first = new TextDecoder().decode((await reader.read()).value); assert.equal(JSON.parse(first).message, '음성 준비 중');
+  finish(); let rest = '';
+  while (true) { const { value, done } = await reader.read(); if (done) break; rest += new TextDecoder().decode(value); }
+  const events = rest.trim().split('\n').map(JSON.parse);
+  assert.equal(events[0].message, '음성 변환 중'); assert.deepEqual(events[1], { type: 'result', data: { transcript: '회의를 변환했습니다.' } });
+});
+
+test('stream errors terminate the response safely; invalid input stays a normal HTTP error', async t => {
+  const request = await app(t, { localAI: { generate: async () => { throw new Error('secret internal detail'); } } });
+  const options = json({ transcript: '충분히 긴 회의 원문입니다.', provider: 'local' }); options.headers.Accept = 'application/x-ndjson';
+  let response = await request('/api/summarize', options);
+  const events = (await response.text()).trim().split('\n').map(JSON.parse);
+  assert.equal(events[0].type, 'progress'); assert.equal(events[1].type, 'error'); assert.equal(events[1].status, 500); assert.doesNotMatch(events[1].error, /secret/);
+  options.body = JSON.stringify({ transcript: '', provider: 'local' }); response = await request('/api/summarize', options);
+  assert.equal(response.status, 400); assert.match(response.headers.get('content-type'), /application\/json/);
+});
 test('hosted deployment requires authentication, matching origin and cloud provider', async t => {
   const password = 'a-long-test-password';
   const request = await app(t, { appOrigin: 'https://meetinglog.example', password, localAI: { status: async () => { throw new Error('Hosted app cannot use local AI'); } } });
